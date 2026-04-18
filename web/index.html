@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Highlight Reel Editor</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Highlight Reel Editor</h1>
+            <p>Frame-accurate slow motion control for your highlight reel</p>
+        </header>
+
+        <main>
+            <section class="video-section">
+                <div class="video-container">
+                     <video id="video" controls>
+                         <source src="test-video.mp4" type="video/mp4">
+                         Your browser does not support the video tag.
+                     </video>
+                </div>
+            </section>
+
+            <section class="timeline-section">
+                <h2>Timeline</h2>
+                <div class="timeline-container">
+                    <canvas id="timelineCanvas" width="800" height="100"></canvas>
+                </div>
+            </section>
+
+            <section class="controls-section">
+                <h2>Slow Motion Controls</h2>
+                <div class="control-group">
+                    <label for="speedFactor">Speed Factor:</label>
+                    <select id="speedFactor">
+                        <option value="0.2">0.2x (Extreme Slow)</option>
+                        <option value="0.3">0.3x (Very Slow)</option>
+                        <option value="0.5" selected>0.5x (Half Speed)</option>
+                        <option value="0.8">0.8x (Slight Slow)</option>
+                    </select>
+                </div>
+                
+                <div class="control-group">
+                    <label for="pitchCorrection">
+                        <input type="checkbox" id="pitchCorrection" checked>
+                        Maintain Audio Pitch
+                    </label>
+                </div>
+
+                <div class="control-buttons">
+                    <button id="selectSegment">Select Segment</button>
+                    <button id="applySlowMotion">Apply Slow Motion</button>
+                    <button id="previewEffects">Preview Effects</button>
+                     <button id="renderFinal">Render Final Reel</button>
+                     <div id="renderStatus" style="margin-top: 10px; color: #666;"></div>
+                </div>
+            </section>
+
+            <section class="segments-section">
+                <h2>Slow Motion Segments</h2>
+                <div id="segmentsList">
+                    <p>No segments defined yet.</p>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Highlight Reel Editor &copy; 2026</p>
+        </footer>
+    </div>
+
+    <script src="js/editor.js"></script>
+    <script>
+        // Initialize the editor when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            // Set the video ID (this would come from the server in a real implementation)
+            if (window.editor) {
+                window.editor.setVideoId('test-video');
+                // Load markers for this video
+                window.editor.loadMarkers();
+            }
+            
+            // Add event listener for render button
+            const renderButton = document.getElementById('renderFinal');
+            const renderStatus = document.getElementById('renderStatus');
+            
+            if (renderButton && renderStatus) {
+                renderButton.addEventListener('click', async () => {
+                    renderButton.disabled = true;
+                    renderStatus.textContent = 'Requesting render from server...';
+                    
+                    try {
+                        // First, ensure markers are saved
+                        await window.editor.saveMarkers();
+                        
+                        // Get the export data from the editor
+                        const exportResponse = await fetch(`/api/markers/${window.editor.videoId}/export`);
+                        if (!exportResponse.ok) {
+                            throw new Error('Failed to export markers');
+                        }
+                        
+                        const exportData = await exportResponse.json();
+                        
+                        // Call the server to render the final video with slow motion
+                        const renderResponse = await fetch('/api/render', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                videoId: window.editor.videoId,
+                                markers: exportData
+                            })
+                        });
+                        
+                        if (renderResponse.ok) {
+                            const result = await renderResponse.json();
+                            renderStatus.textContent = result.message || 'Render request submitted successfully!';
+                            
+                            // The actual rendering will happen asynchronously
+                            // In a real implementation, you might want to add polling to check status
+                        } else {
+                            const error = await renderResponse.json();
+                            throw new Error(error.error || 'Render failed');
+                        }
+                    } catch (error) {
+                        renderStatus.textContent = `Error: ${error.message}`;
+                        console.error('Render error:', error);
+                    } finally {
+                        renderButton.disabled = false;
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

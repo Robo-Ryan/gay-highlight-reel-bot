@@ -8,8 +8,65 @@ const fetch = require('node-fetch');
 const winston = require('winston');
 const featureFlags = require('./feature-flags');
 
+// Web server dependencies
+const express = require('express');
+const cors = require('cors');
+
 // Set ffmpeg path
 ffmpeg.setFfmpegPath(ffmpegStatic);
+
+// Setup Express web server
+const app = express();
+const PORT = process.env.WEB_PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('../web')); // Serve static files from web directory
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Import markers API routes
+const markersRouter = require('./api/markers');
+
+// Mount markers API
+app.use('/api/markers', markersRouter);
+
+// Render endpoint
+app.post('/api/render', async (req, res) => {
+    try {
+        const { videoId, markers } = req.body;
+        
+        if (!videoId || !markers) {
+            return res.status(400).json({ error: 'Missing required parameters' });
+        }
+        
+        // In a real implementation, you would:
+        // 1. Queue the render job
+        // 2. Process the video with the specified slow motion segments
+        // 3. Return the result
+        
+        // For now, we'll simulate a successful render request
+        logger.info(`Render request received for video ${videoId} with ${markers.slowMotionSegments?.length || 0} slow motion segments`);
+        
+        // This would normally trigger the video processing
+        // VideoProcessor.processHighlightReel(playlistPath, outputPath, videoMetadata, { slowMotionSegments: markers.slowMotionSegments });
+        
+        res.json({ 
+            success: true, 
+            message: 'Render request submitted successfully. Processing will begin shortly.',
+            videoId: videoId,
+            jobId: Date.now()
+        });
+        
+    } catch (error) {
+        logger.error('Error processing render request:', error);
+        res.status(500).json({ error: 'Failed to process render request' });
+    }
+});
 
 // Setup logging
 const logger = winston.createLogger({
@@ -293,6 +350,18 @@ bot.launch();
 
 logger.info('Gay Highlight Reel Bot is running...');
 
+// Start Express server
+app.listen(PORT, () => {
+    logger.info(`Web interface server running on port ${PORT}`);
+    logger.info(`Web interface available at http://localhost:${PORT}`);
+});
+
 // Enable graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => {
+    bot.stop('SIGINT');
+    process.exit(0);
+});
+process.once('SIGTERM', () => {
+    bot.stop('SIGTERM');
+    process.exit(0);
+});

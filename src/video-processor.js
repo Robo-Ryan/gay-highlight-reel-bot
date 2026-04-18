@@ -66,10 +66,128 @@ async function processHighlightReel(playlistPath, outputPath, videoMetadata, opt
     }
 
     // Handle slow motion requests
-    if (options.slowMotionClips && options.slowMotionClips.length > 0) {
-      // This would require a more complex filter approach
-      // For now, we'll log that this feature is not yet implemented
-      console.log('Slow motion processing not yet implemented');
+    if (featureFlags.isSlowMotionEnabled() && options.slowMotionSegments && options.slowMotionSegments.length > 0) {
+      // We'll use a complex filter chain to apply slow motion to specific time segments
+      // First, we need to calculate the time ranges for each clip
+      let currentTime = 0;
+      const clipSegments = [];
+      
+      // Calculate the time ranges for each clip
+      videoMetadata.forEach((meta, index) => {
+        const duration = meta.duration || 10; // default to 10 seconds
+        const segment = {
+          index,
+          start: currentTime,
+          end: currentTime + duration,
+          duration: duration,
+          metadata: meta
+        };
+        clipSegments.push(segment);
+        currentTime += duration;
+      });
+      
+      // Build the filter complex
+      // We'll use the select filter to split the video into segments,
+      // apply slow motion to selected segments, then concat them back
+      
+      // For simplicity, we'll use a single filter complex that applies slow motion
+      // to clips that are in the slowMotionClips array
+      
+      // Create a filter that applies slow motion based on time ranges
+      const filterComplex = [];
+      
+      // Counter for filter labels
+      let filterId = 0;
+      
+      // Create segments for processing
+      // We need to split the timeline into segments that are either in slow motion or not
+      const timelineSegments = [];
+      let currentStart = 0;
+      let currentEnd = currentTime; // total duration
+      
+      // Sort slow motion segments by start time
+      const sortedSlowMotion = [...options.slowMotionSegments].sort((a, b) => a.startTime - b.startTime);
+      
+      // Add boundaries for all slow motion segments
+      const boundaries = new Set();
+      boundaries.add(currentStart);
+      boundaries.add(currentEnd);
+      
+      sortedSlowMotion.forEach(segment => {
+        boundaries.add(segment.startTime);
+        boundaries.add(segment.endTime);
+      });
+      
+      // Create timeline segments from boundaries
+      const sortedBoundaries = Array.from(boundaries).sort((a, b) => a - b);
+      
+      for (let i = 0; i < sortedBoundaries.length - 1; i++) {
+        const start = sortedBoundaries[i];
+        const end = sortedBoundaries[i + 1];
+        
+        // Determine if this segment should be in slow motion
+        const inSlowMotion = sortedSlowMotion.some(slowMo => 
+          slowMo.startTime <= start && slowMo.endTime >= end
+        );
+        
+        timelineSegments.push({
+          start,
+          end,
+          duration: end - start,
+          inSlowMotion
+        });
+      }
+      
+      // Process each timeline segment
+      timelineSegments.forEach((segment, idx) => {
+        const startLabel = `[in]trim=start=${segment.start}:end=${segment.end},setpts=PTS-STARTPTS[v${filterId}]`;
+        
+        if (segment.inSlowMotion) {
+          // Apply slow motion (adjust speed factor from options, default to 0.5)
+          const speedFactor = segment.speed || 0.5;
+          const timeFactor = 1 / speedFactor;
+          
+          // Apply slow motion to video
+          const slowMotionLabel = `[v${filterId}]setpts=PTS*${timeFactor}[a${filterId}]`;
+          // Adjust audio tempo to match video speed
+          const audioFilter = `[in]atrim=start=${segment.start}:end=${segment.end},asetpts=PTS-STARTPTS,atempo=${speedFactor}[b${filterId}]`;
+          
+          filterComplex.push(startLabel, slowMotionLabel, audioFilter);
+        } else {
+          // Just pass through
+          const passThroughLabel = `[v${filterId}]copy[c${filterId}]`;
+          const audioPassThrough = `[in]atrim=start=${segment.start}:end=${segment.end},asetpts=PTS-STARTPTS,atempo=1.0[d${filterId}]`;
+          filterComplex.push(startLabel, passThroughLabel, audioPassThrough);
+        }
+        
+        filterId++;
+      });
+      
+      // Now concat all the processed segments
+      // Create video and audio concat filters
+      const videoInputs = [];
+      const audioInputs = [];
+      
+      for (let i = 0; i < timelineSegments.length; i++) {
+        const segment = timelineSegments[i];
+        if (segment.inSlowMotion) {
+          videoInputs.push(`[a${i}]`);
+          audioInputs.push(`[b${i}]`);
+        } else {
+          videoInputs.push(`[c${i}]`);
+          audioInputs.push(`[d${i}]`);
+        }
+      }
+      
+      // Add the concat filters
+      filterComplex.push(`${videoInputs.join('')}concat=n=${timelineSegments.length}:v=1:a=0[outv]`);
+      filterComplex.push(`${audioInputs.join('')}concat=n=${timelineSegments.length}:v=0:a=1[outa]`);
+      
+      // Apply the filter complex
+      command = command
+        .complexFilter(filterComplex.join(';'), ['outv', 'outa'])
+        .map('[outv]')
+        .map('[outa]');
     }
 
     // Event handlers

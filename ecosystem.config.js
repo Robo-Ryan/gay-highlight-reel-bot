@@ -1,23 +1,27 @@
 module.exports = {
   apps: [
     {
-      name: 'highlightreel',
+      name: 'gay-highlight-reel-bot',
       script: 'src/bot.js',
-      cwd: '/Users/ryanmerlini/Documents/RoboRyan/Video-stitcher-bot',
-      env: {
-        NODE_ENV: 'development',
-        TELEGRAM_BOT_TOKEN: '8321483772:AAFmEUGa7sLsTqkc9sY9XOUBebkFEozKuq0'
-      },
-      env_production: {
-        NODE_ENV: 'production'
-      },
       instances: 1,
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
-      out_file: 'logs/app.log',
+      env: {
+        NODE_ENV: 'development',
+        WEB_PORT: 3000,
+        FEATURE_WHO_MADE_PLAY: 'true',
+        FEATURE_SLOW_MOTION: 'true'
+      },
+      env_production: {
+        NODE_ENV: 'production',
+        WEB_PORT: 3000,
+        FEATURE_WHO_MADE_PLAY: 'true',
+        FEATURE_SLOW_MOTION: 'true'
+      },
       error_file: 'logs/error.log',
-      log_file: 'logs/pm2.log',
+      out_file: 'logs/app.log',
+      log_file: 'logs/combined.log',
       time: true
     }
   ]

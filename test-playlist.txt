@@ -1,0 +1,4 @@
+
+file '/Users/ryanmerlini/Documents/RoboRyan/Video-stitcher-bot/test-videos/test1.mp4'
+file '/Users/ryanmerlini/Documents/RoboRyan/Video-stitcher-bot/test-videos/test2.mp4'
+file '/Users/ryanmerlini/Documents/RoboRyan/Video-stitcher-bot/test-videos/test3.mp4'
