@@ -2,7 +2,8 @@ module.exports = {
   apps: [
     {
       name: 'gay-highlight-reel-bot',
-      script: 'src/bot.js',
+      script: '/Users/ryanmerlini/gay-highlight-reel-bot/src/bot.js',
+      cwd: '/Users/ryanmerlini/gay-highlight-reel-bot',
       instances: 1,
       autorestart: true,
       watch: false,

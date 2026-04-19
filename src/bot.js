@@ -1,4 +1,4 @@
-require('dotenv').config({ path: '../config/bot.env' });
+require('dotenv').config({ path: require('path').join(__dirname, '../config/bot.env') });
 const { Telegraf } = require('telegraf');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegStatic = require('ffmpeg-static');
@@ -22,7 +22,7 @@ const PORT = process.env.WEB_PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('../web')); // Serve static files from web directory
+app.use(express.static(path.join(__dirname, '../web')));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -73,8 +73,8 @@ const logger = winston.createLogger({
   level: 'info',
   format: winston.format.json(),
   transports: [
-    new winston.transports.File({ filename: '../logs/error.log', level: 'error' }),
-    new winston.transports.File({ filename: '../logs/app.log' })
+    new winston.transports.File({ filename: path.join(__dirname, '../logs/error.log'), level: 'error' }),
+    new winston.transports.File({ filename: path.join(__dirname, '../logs/app.log') })
   ]
 });
 
@@ -121,7 +121,7 @@ function getVideoDuration(videoPath) {
 
 // Start command
 bot.start((ctx) => {
-  ctx.reply('Welcome to the Gay Highlight Reel Bot! 🎬\n' + 
+  ctx.reply('Welcome to the Gay Highlight Reel Bot! 🏈\n' +
           'Send me video clips and I\'ll stitch them together into a highlight reel.\n' + 
           'After sending a video, I\'ll ask \'Who made the play?\'');
 });
@@ -155,62 +155,52 @@ bot.on('video', async (ctx) => {
     const fileId = video.file_id;
     const fileName = `${fileId}.mp4`;
     const filePath = path.join(PENDING_VIDEOS_DIR, fileName);
-    
-    // Store video info for who made the play prompt
-    const state = {
-      fileId,
-      fileName,
-      filePath,
-      timestamp: new Date().toISOString()
-    };
-    
-    playSubmissionState.set(ctx.from.id, state);
-    
-    // Download the video
+
+    // Download the video first
     const fileLink = await ctx.telegram.getFileLink(fileId);
     const response = await fetch(fileLink);
-    
+
     if (!response.ok) {
       throw new Error('Failed to download video: ' + response.statusText);
     }
-    
+
     const fileStream = fs.createWriteStream(filePath);
     await new Promise((resolve, reject) => {
       response.body.pipe(fileStream);
       response.body.on('error', reject);
       fileStream.on('finish', resolve);
     });
-    
+
     logger.info('Video downloaded: ' + filePath, { fileId, fileName });
-    
-    // Conditionally ask who made the play based on feature flag
-    if (featureFlags.isWhoMadePlayEnabled()) {
-      ctx.reply('Thanks for the video! Who made the play? 🏀');
-    } else {
-      // If feature is disabled, automatically add to playlist with default text
-      const resolvedPath = path.resolve(state.filePath);
-      const playlistEntry = 'file \'' + resolvedPath + '\'\n';
-      fs.appendFileSync(FFMPG_PLAYLIST_PATH, playlistEntry);
-      
-      // Create default metadata
+
+    if (!featureFlags.isWhoMadePlayEnabled()) {
+      const resolvedPath = path.resolve(filePath);
+      fs.appendFileSync(FFMPG_PLAYLIST_PATH, 'file \'' + resolvedPath + '\'\n');
       const metadata = {
-        filename: state.fileName,
-        fileId: state.fileId,
-        timestamp: state.timestamp,
+        filename: fileName, fileId,
+        timestamp: new Date().toISOString(),
         sender: ctx.from.username || ctx.from.first_name,
-        submitter: 'Player Unknown',
-        processed: false
+        submitter: 'Player Unknown', processed: false
       };
-      
-      const metadataPath = path.join(PENDING_VIDEOS_DIR, `${state.fileName}.json`);
-      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
-      
-      logger.info('Video added to playlist with default metadata: ' + metadataPath, { sender: metadata.sender });
-      
-      // Confirm addition
+      fs.writeFileSync(path.join(PENDING_VIDEOS_DIR, `${fileName}.json`), JSON.stringify(metadata, null, 2));
       ctx.reply('Your video has been added to the highlight reel queue.');
+      return;
     }
-    
+
+    // Queue this video under the user; ask only once per batch
+    let userState = playSubmissionState.get(ctx.from.id);
+    const isNewBatch = !userState;
+    if (isNewBatch) {
+      userState = { videos: [], sender: ctx.from.username || ctx.from.first_name };
+      playSubmissionState.set(ctx.from.id, userState);
+    }
+    userState.videos.push({ fileId, fileName, filePath, timestamp: new Date().toISOString() });
+
+    if (isNewBatch) {
+      ctx.reply('Got the video! Who made the play? 🏈\n(Send more clips and I\'ll tag them all with your answer.)');
+    }
+    // If more videos arrive before they answer, stay silent — one answer covers all
+
   } catch (error) {
     logger.error('Error handling video:', error);
     ctx.reply('Sorry, there was an error processing your video. Please try again.');
@@ -219,42 +209,32 @@ bot.on('video', async (ctx) => {
 
 // Handle text messages (for who made the play)
 bot.on('text', async (ctx) => {
-  if (!featureFlags.isWhoMadePlayEnabled()) {
-    return; // Ignore text messages if feature is disabled
-  }
-  
-  const state = playSubmissionState.get(ctx.from.id);
-  
-  if (state) {
-    const submitter = ctx.message.text.trim();
-    
-    // Create metadata
+  if (!featureFlags.isWhoMadePlayEnabled()) return;
+
+  const userState = playSubmissionState.get(ctx.from.id);
+  if (!userState) return;
+
+  const submitter = ctx.message.text.trim();
+  const count = userState.videos.length;
+
+  for (const state of userState.videos) {
     const metadata = {
       filename: state.fileName,
       fileId: state.fileId,
       timestamp: state.timestamp,
-      sender: ctx.from.username || ctx.from.first_name,
-      submitter: submitter,
+      sender: userState.sender,
+      submitter,
       processed: false
     };
-    
-    const metadataPath = path.join(PENDING_VIDEOS_DIR, `${state.fileName}.json`);
-    fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
-    
-    // Add to FFmpeg playlist
-    const resolvedPath = path.resolve(state.filePath);
-    const playlistEntry = 'file \'' + resolvedPath + '\'\n';
-    fs.appendFileSync(FFMPG_PLAYLIST_PATH, playlistEntry);
-    
-    logger.info('Video metadata saved and added to playlist: ' + metadataPath, { submitter, sender: metadata.sender });
-    
-    // Clear state
-    playSubmissionState.delete(ctx.from.id);
-    
-    // Confirm
-    ctx.reply('Got it! Video saved with submitter: ' + submitter + ' 🎉\n' +
-            'Your video has been added to the highlight reel queue.');
+    fs.writeFileSync(path.join(PENDING_VIDEOS_DIR, `${state.fileName}.json`), JSON.stringify(metadata, null, 2));
+    fs.appendFileSync(FFMPG_PLAYLIST_PATH, 'file \'' + path.resolve(state.filePath) + '\'\n');
+    logger.info('Video saved: ' + state.fileName, { submitter, sender: userState.sender });
   }
+
+  playSubmissionState.delete(ctx.from.id);
+
+  const videoWord = count === 1 ? 'video' : `${count} videos`;
+  ctx.reply(`🏈 ${videoWord} saved for ${submitter} and added to the highlight reel queue.`);
 });
 
 // Render command - this would be used by admin to create final video
@@ -277,7 +257,7 @@ bot.command('render', async (ctx) => {
       return;
     }
     
-    ctx.reply('🎯 Starting to render highlight reel with ' + videoCount + ' videos... This may take a while.');
+    ctx.reply('🏈 Starting to render highlight reel with ' + videoCount + ' videos... This may take a while.');
     
     // Collect metadata for all videos in the playlist
     const videoMetadata = [];
@@ -307,7 +287,7 @@ bot.command('render', async (ctx) => {
     // Create output filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const outputFileName = 'highlight-reel-' + timestamp + '.mp4';
-    const outputPath = path.join(FINAL_VIDEOS_DIR, outputFileName);
+    const outputPath = path.resolve(FINAL_VIDEOS_DIR, outputFileName);
     
     // Use the video processor to create the highlight reel with subtitles
     const videoProcessor = require('./video-processor');
@@ -328,7 +308,7 @@ bot.command('render', async (ctx) => {
       options
     ).then((finalPath) => {
       logger.info('Highlight reel created: ' + finalPath);
-      ctx.reply('✅ Rendering complete! Your highlight reel with ' + videoCount + ' videos is ready.');
+      ctx.reply('🏈 Rendering complete! Your highlight reel with ' + videoCount + ' videos is ready.');
     }).catch((error) => {
       logger.error('Error creating highlight reel:', error);
       ctx.reply('❌ Error rendering the highlight reel. Please try again later.');
